@@ -2,7 +2,9 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
-
+#include <stdbool.h>
+#include <termios.h>
+#include <poll.h>
 
 // 4096 = 0x1000
 #define memsize 4096
@@ -41,12 +43,14 @@ int pc = 0x200; // Start at address 512
 int sp = 0xEA0; // Place stack just before memory
 int delayTimer = 0;
 int soundTimer = 0;
+bool screenChanged = true;
 
 void reset() {
   pc = 0x200; // Start at address 512
   sp = 0xEA0; // Place stack just before memory
   delayTimer = 0;
   soundTimer = 0;
+  screenChanged = true;
 }
 
 void draw_sprite(int x, int y, int height) {
@@ -72,9 +76,12 @@ void draw_sprite(int x, int y, int height) {
       memory[dest+1] ^= memory[src] << (8-offset);
     }
   }
+  screenChanged = true;
 }
 
 void draw_screen() {
+  if (!screenChanged) return;
+
   printf("\e[1;1H"); // Go to top left
 
   for(int y=0;y<displayHeight;y++) {
@@ -86,6 +93,7 @@ void draw_screen() {
     }
     printf("\n");
   }
+  screenChanged = false;
 }
 
 void math_op(int vx, int vy, int op)
@@ -98,7 +106,7 @@ void math_op(int vx, int vy, int op)
     case 0x1:
       reg[vx] |= reg[vy];
       break;
-    case 2:
+    case 0x2:
       reg[vx] &= reg[vy];
       break;
     case 0x3:
@@ -127,6 +135,23 @@ void set_bcd(int value)
   address = value % 10;
   address |= ((value / 10) % 10) << 4;
   address |= ((value / 100) % 10) << 8;
+}
+
+char scan_key(bool wait) {
+  if (!wait) {
+    struct pollfd p;
+    p.fd = 0; p.events = POLLIN;
+    if (poll(&p, 1, 3500) <= 0) return 0xFF;
+  }
+
+  while (wait) {
+    int ch = getchar();
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return (ch - 'a') + 10;
+    if (ch >= 'A' && ch <= 'F') return (ch - 'A') + 10;
+  }
+
+  return 0xFF; // the equivalent of '-1'
 }
 
 void run1(uint16_t opcode)
@@ -184,11 +209,13 @@ void run1(uint16_t opcode)
       draw_sprite(reg[vx], reg[vy], opcode&0xF);
       break;
     case 0xE:
+      if (arg == 0x9E && scan_key(false) == memory[vx] && memory[vx] != 0xFF) pc += 2;
+      if (arg == 0xA1 && scan_key(false) != memory[vx] && memory[vx] != 0xFF) pc += 2;
       // TODO keys
       break;
     case 0xF:
       if(arg == 0x07) reg[vx] = delayTimer; 
-      if(arg == 0x0A) {}; // TODO await and store keypress
+      if(arg == 0x0A) reg[vx] = scan_key(true);
       if(arg == 0x15) delayTimer = reg[vx]; 
       if(arg == 0x18) soundTimer = reg[vx]; 
       if(arg == 0x1E) address += reg[vx];
@@ -207,6 +234,8 @@ void run()
   int opcode;
   opcode = memory[pc] << 8; pc++;
   opcode |= memory[pc]; pc++;
+
+  draw_screen();
   
   // It is not stated anywhere that zero means stop,
   // but as it doesn't mean anything else, now it does.
@@ -230,10 +259,34 @@ void run()
   }
 }
 
+static struct termios oldflags, newflags;
+void set_input_unbuffered_no_echo() {
+  tcgetattr(STDIN_FILENO, &oldflags);
+  newflags = oldflags;
+  newflags.c_lflag &= ~(ICANON|ECHO);
+  newflags.c_cc[VMIN]=1;
+  newflags.c_cc[VTIME]=0;
+  tcsetattr(STDIN_FILENO, TCSANOW, &newflags);
+}
+void reset_terminal() {
+//  oldflags.c_lflag |= ECHO|ICANON;
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldflags);
+}
+
+void save_rom(char * filename) {
+  FILE * file = fopen(filename, "wb");
+  for(int i=512;i<pc;i++) {
+    fputc(memory[i], file);
+  }
+  fclose(file);
+}
+
 #define oper(a,b) memory[pc++]=a;memory[pc++]=b
 
 int main (int argc, char ** argv)
 {
+  set_input_unbuffered_no_echo();
+
   printf("\e[2J"); // Clear screen
 /*
   // Do a test / demo run
@@ -289,6 +342,16 @@ int main (int argc, char ** argv)
 
   run();
 */
+
+  // Test program: scan for input and display it on screen
+  oper(0xF1, 0x0A); // scan key in reg1
+  oper(0xF1, 0x29); // store its address
+  oper(0x60, 0x00); // Set reg 0 to zero
+  oper(0xD0, 05);   // and print sprite on 0,0
+  save_rom("show_keypress.ch8");
+  run();
+
+/*
   reset();
 //  FILE * file = fopen("game.c8", "rb");
   FILE * file = fopen("test_opcode.ch8", "rb");
@@ -300,4 +363,6 @@ int main (int argc, char ** argv)
   fclose(file);
 
   run();
+ */ 
+  reset_terminal();
 }

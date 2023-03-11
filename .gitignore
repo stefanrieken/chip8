@@ -1,3 +1,5 @@
 a.out
+chip8
 *.ch8
 *.c8
+*.o

@@ -9,7 +9,7 @@
 unsigned char memory[memsize] = {
   // The first 512 chars of memory are reserved.
   // One common use is to store the sprites for numbers 0-F
-  // Appratenly start address 0x50 is traditional, but as
+  // Apparenly start address 0x50 is traditional, but as
   // any adress will do, we just use address 0 so that we
   // can quickly express it in C like below.
   0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
